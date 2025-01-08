@@ -86,18 +86,33 @@ const char index_html[] PROGMEM = R"rawliteral(
     <button class="" onclick="sendCommand('/rotateright')">Rotate right</button> 
   </div>
 
+  <div class="slider-container">
+    <label for="speed-slider">Adjust Speed:</label>
+    <input id="speed-slider" type="range" min="0" max="10" value="0" step="0.5" oninput="updateSpeed(this.value)">
+    <span id="speed-value">0</span>
+  </div>
+
   <script>
     function sendCommand(endpoint) {
-        fetch(endpoint)
-            .then(response => response.text())
-            .then(data => console.log(data))
-            .catch(error => console.error('Error:', error));
+      fetch(endpoint)
+        .then(response => response.text())
+        .then(data => console.log(data))
+        .catch(error => console.error('Error:', error));
     }
-  </script>
+
+    function updateSpeed(value) {
+      document.getElementById('speed-value').innerText = value;
+      fetch(/setSpeed?value=${value})
+        .then(response => response.text())
+        .then(data => console.log(data))
+        .catch(error => console.error('Error:', error));
+    }
+      </script>
+
 </body>
 </html>
 )rawliteral";
-
+float speed = 3.5; // mm/s
 float Vx = 0;
 float Vy = 0;
 float W = 0.0;
@@ -142,7 +157,7 @@ void setup()
     //   Define HTTP endpoints for motor control
     server.on("/forward", HTTP_GET, [](AsyncWebServerRequest *request)
               {
-        Vx = 3.5;
+        Vx = speed;
         Vy = 0;
         W = 0;
         // Run_Motor();
@@ -150,7 +165,7 @@ void setup()
 
     server.on("/backward", HTTP_GET, [](AsyncWebServerRequest *request)
               {
-        Vx = -3.5;
+        Vx = -speed;
         Vy = 0;
         W = 0;
         // Run_Motor();
@@ -159,7 +174,7 @@ void setup()
     server.on("/left", HTTP_GET, [](AsyncWebServerRequest *request)
               {
         Vx = 0;
-        Vy = 3.5;
+        Vy = speed;
         W = 0;
         // Run_Motor();
         request->send(200, "text/plain", "Moving Left"); });
@@ -167,7 +182,7 @@ void setup()
     server.on("/right", HTTP_GET, [](AsyncWebServerRequest *request)
               {
         Vx = 0;
-        Vy = -3.5;
+        Vy = -speed;
         W = 0;
         request->send(200, "text/plain", "Moving Right"); });
 
@@ -180,60 +195,60 @@ void setup()
 
     server.on("/diag45", HTTP_GET, [](AsyncWebServerRequest *request)
               {
-        Vx = 2.5;
-        Vy = -2.5;
+        Vx = speed*1.41;
+        Vy = -speed*1.41;
         W = 0;
         request->send(200, "text/plain", "Moving 45°"); });
 
     server.on("/diag135", HTTP_GET, [](AsyncWebServerRequest *request)
               {
-        Vx = 2.5;
-        Vy = 2.5;
+        Vx = speed*1.41;
+        Vy = speed*1.41;
         W = 0;
         request->send(200, "text/plain", "Moving 135°"); });
 
     server.on("/diag225", HTTP_GET, [](AsyncWebServerRequest *request)
               {
-        Vx = -2.5;
-        Vy = 2.5;
+        Vx = -speed*1.41;
+        Vy = speed*1.41;
         W = 0;
         request->send(200, "text/plain", "Moving 225°"); });
 
     server.on("/diag315", HTTP_GET, [](AsyncWebServerRequest *request)
               {
-        Vx = -2.5;
-        Vy = -2.5;
+        Vx = -speed*1.41;
+        Vy = -speed*1.41;
         W = 0;
         request->send(200, "text/plain", "Moving 315°"); });
+    server.begin();
 
     server.on("/rotateleft", HTTP_GET, [](AsyncWebServerRequest *request)
               {
         Vx = 0;
         Vy = 0;
-        W = -15;
+        W = -speed*3;
         request->send(200, "text/plain", "Moving 315°"); });
 
-    server.begin();
     server.on("/rotateright", HTTP_GET, [](AsyncWebServerRequest *request)
               {
         Vx = 0;
-        Vy = 0;
-        W = 15;
+        Vy = 0; 
+        W = speed*3;
         request->send(200, "text/plain", "Moving 315°"); });
 
-    server.on("/setSpeed", HTTP_GET, [](AsyncWebServerRequest *request)
-              {
-              if (request->hasParam("value")) {
-                String value = request->getParam("value")->value();
-                int speed = value.toInt();
-                Serial.print("Speed set to: ");
-                Serial.println(speed);
-                // Update motor speed variable here
-                // Example: motorSpeed = speed;
-                request->send(200, "text/plain", "Speed updated");
-              } else {
-                request->send(400, "text/plain", "Missing speed value");
-              } });
+    // server.on("/setSpeed", HTTP_GET, [](AsyncWebServerRequest *request)
+    //           {
+    //           if (request->hasParam("value")) {
+    //             String value = request->getParam("value")->value();
+    //             speed = value.toFloat();
+    //             Serial.print("Speed set to: ");
+    //             Serial.println(speed);
+    //             // Update motor speed variable here
+    //             // Example: motorSpeed = speed;
+    //             request->send(200, "text/plain", "Speed updated");
+    //           } else {
+    //             request->send(400, "text/plain", "Missing speed value");
+    //           } });
 
     server.begin();
 }
@@ -358,13 +373,13 @@ void loop()
         if (pid3 < -255)
             pid3 = -255;
 
-        if (Vx == 0 && Vy == 0 && W == 0)
-        {
-            pid0 = 0;
-            pid1 = 0;
-            pid2 = 0;
-            pid3 = 0;
-        }
+        // if (Vx == 0 && Vy == 0 && W == 0)
+        // {
+        //     pid0 = 0;
+        //     pid1 = 0;
+        //     pid2 = 0;
+        //     pid3 = 0;
+        // }
 
         if (pid0 >= 0)
         {
