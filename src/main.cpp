@@ -4,14 +4,26 @@
 #include "MyPID.h"
 #include "MySerial.h"
 #include "HardwareSerial.h"
+#include "HX711.h"
+#include "soc/rtc.h"
 
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 const char *ssid = "Be Hai";        // Replace with your Wi-Fi SSID
 const char *password = "333666999"; // Replace with your Wi-Fi password
-
+#define DT 2                        // Data pin connected to GPIO 21
+#define SCK 15                      // Clock pin connected to GPIO 22
+uint32_t reading = 0;
+HX711 scale;
+typedef enum Robot_State
+{
+    None,
+    Triangle,
+    SendWeight
+};
+Robot_State SpecialState = None;
 AsyncWebServer server(80);
-
+float Mass = 0;
 // WebApp HTML with corrected layout and commands
 const char index_html[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
@@ -71,7 +83,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 </head>
 <body>
   <h1>ESP32-CAM Robot</h1>
-  <img id="video-stream" src="http://Your_ESP32_CAM_IP:81/stream" alt="Video Stream">
+  <img id="video-stream" src="http://192.168.1.13:81/stream" alt="Video Stream">
   <div class="container">
     <button class="diag135" onclick="sendCommand('/diag135')">&#x2196;</button> <!-- Up-left -->
     <button class="forward" onclick="sendCommand('/forward')">&#x2191;</button> <!-- Up -->
@@ -85,6 +97,10 @@ const char index_html[] PROGMEM = R"rawliteral(
     <button class="" onclick="sendCommand('/rotateleft')">Rotate left</button> 
     <button class="" onclick="sendCommand('/rotateright')">Rotate right</button> 
   </div>
+  <div>
+  <h2>Weight: <span id="weight-value">0</span></h2>
+  <button onclick="updateWeight()">Get Weight</button>
+</div>
 
   <script>
     function sendCommand(endpoint) {
@@ -92,6 +108,12 @@ const char index_html[] PROGMEM = R"rawliteral(
             .then(response => response.text())
             .then(data => console.log(data))
             .catch(error => console.error('Error:', error));
+    }
+    function updateWeight() {
+      fetch('/weight')
+        .then(response => response.text())
+        .then(data => document.getElementById('weight-value').innerText = data)
+        .catch(error => console.error('Error:', error));
     }
   </script>
 </body>
@@ -104,8 +126,9 @@ float W = 0.0;
 void setup()
 {
 
-    Serial.begin(115200);  // Initialize serial communication at 115200 baud rate
-    Serial.print("Hello"); // Print
+    Serial.begin(115200); // Initialize serial communication at 115200 baud rate
+    // Serial.print("Hello"); // Print
+
     Init_Motor();
     Init_Encoder();
     Init_PID();
@@ -131,7 +154,22 @@ void setup()
     {
         Serial.println("Failed to connect to WiFi");
     }
+    scale.begin(DT, SCK);
 
+    // Wait for the scale to stabilize
+    // if (!scale.is_ready())
+    // {
+    //     Serial.println("HX711 not found.");
+    //     while (true);
+    // }
+    Serial.println("HX711 initialized.");
+    // long rawValue = scale.get_units();
+    // Serial.println(rawValue);
+    // Set calibration factor (you will need to adjust this value)
+    scale.set_scale(-1616593.f); // Adjust this to your specific load cell
+    scale.tare();                // Reset the scale to zero
+
+    Serial.println("Calibration done.");
     // Initialize motors
     Init_Motor();
 
@@ -235,6 +273,19 @@ void setup()
                 request->send(400, "text/plain", "Missing speed value");
               } });
 
+    server.on("/setWeight", HTTP_GET, [](AsyncWebServerRequest *request)
+              {
+                // Mass = abs(scale.get_units(10));
+    if (request->hasParam("value")) {
+      String value = request->getParam("value")->value();
+      float weight = abs(scale.get_units(10));  // Use toFloat() to handle decimal values
+      Serial.print("Weight set to: ");
+      Serial.println(weight);
+      request->send(200, "text/plain", String(weight));
+    } else {
+      request->send(400, "text/plain", "Missing weight value");
+    } });
+
     server.begin();
 }
 
@@ -260,7 +311,7 @@ float Omega_M2 = 0;
 float Omega_M3 = 0;
 
 float e0[] = {0.0, 0.0, 0.0};
-float Kp0 = 0.2; // 0.5
+float Kp0 = 0.9; // 0.5
 float Ki0 = 2.3; // 12.3
 float Kd0 = 0.0;
 float integral0 = 0.0;
@@ -269,7 +320,7 @@ int pid0 = 0.00;
 float setpoint0 = 0;
 
 float e1[] = {0.0, 0.0, 0.0};
-float Kp1 = 0.2; // 0.5
+float Kp1 = 0.9; // 0.5
 float Ki1 = 2.3; // 12.3
 float Kd1 = 0.0;
 float integral1 = 0.0;
@@ -278,7 +329,7 @@ int pid1 = 0.00;
 float setpoint1 = 0;
 
 float e2[] = {0.0, 0.0, 0.0};
-float Kp2 = 0.2; // 0.5
+float Kp2 = 0.9; // 0.5
 float Ki2 = 2.3; // 12.3
 float Kd2 = 0.0;
 float integral2 = 0.0;
@@ -287,7 +338,7 @@ int pid2 = 0.00;
 float setpoint2 = 0;
 
 float e3[] = {0.0, 0.0, 0.0};
-float Kp3 = 0.2; // 0.5
+float Kp3 = 0.9; // 0.5
 float Ki3 = 2.3; // 12.3
 float Kd3 = 0.0;
 float integral3 = 0.0;
@@ -298,12 +349,44 @@ float R = 0.045;
 float lx = 0.122;
 float ly = 0.145;
 
+int count_Triangle = 0;
 void loop()
 {
     uint32_t nowtime = millis();            // Get the current time in milliseconds
     uint32_t deltatime = nowtime - pretime; // Calculate the elapsed time
     if (deltatime >= tsamp * 1000)
     { // Check if the sampling time has passed
+        // Switch(SpecialState)
+        // {
+        // case Triangle:
+        // {
+        //     if (count_Triangle < 20)
+        //     {
+        //         Vx = 2.5;
+        //         Vy = -2.5;
+        //         W = 0;
+        //         count++;
+        //     }
+        //     else if(count_Triangle>=20 && count_Triangle<40){
+        //         Vx = -2.5;
+        //         Vy = -2.5;
+        //         W = 0;
+        //         count++;
+        //     }
+        //     else if(count_Triangle>=40 && count_Triangle<60){
+        //         Vx = -2.5;
+        //         Vy = -2.5;
+        //         W = 0;
+        //         count++;
+        //     }
+        //     else {
+        //         Vx = -2.5;
+        //         Vy = -2.5;
+        //         W = 0;
+        //         SpecialState = None;
+        //     }
+        // }
+        // }
         setpoint0 = (1 / R) * (Vx - Vy - (lx + ly) * W);
         setpoint1 = (1 / R) * (Vx + Vy + (lx + ly) * W);
         setpoint2 = (1 / R) * (Vx + Vy - (lx + ly) * W);
@@ -423,6 +506,25 @@ void loop()
         prePulse_Encoder1 = nowPulse_Encoder1;
         prePulse_Encoder2 = nowPulse_Encoder2;
         prePulse_Encoder3 = nowPulse_Encoder3;
+        count++;
+        if (count >= 10)
+        {
+            if (scale.is_ready())
+            {
+                // Read and print the weight
+                // float weight = abs(scale.get_units(10)); // Average of 10 readings
+                // Serial.print("Weight: ");
+                // Serial.print(weight, 2); // Print with 2 decimal points
+                // Serial.println(" kg");
+            }
+            else
+            {
+                // Serial.println("HX711 not ready.");
+            }
+
+            // delay(1000); // Update every second
+            count = 0;
+        }
     }
 }
 
