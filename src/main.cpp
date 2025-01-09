@@ -83,7 +83,7 @@ const char index_html[] PROGMEM = R"rawliteral(
 </head>
 <body>
   <h1>ESP32-CAM Robot</h1>
-  <img id="video-stream" src="http://192.168.1.13:81/stream" alt="Video Stream">
+  <img id="video-stream" src="http://192.168.1.13:81/stream" alt="Video Stream" style="transform: rotate(180deg);">
   <div class="container">
     <button class="diag135" onclick="sendCommand('/diag135')">&#x2196;</button> <!-- Up-left -->
     <button class="forward" onclick="sendCommand('/forward')">&#x2191;</button> <!-- Up -->
@@ -95,6 +95,7 @@ const char index_html[] PROGMEM = R"rawliteral(
     <button class="backward" onclick="sendCommand('/backward')">&#x2193;</button> <!-- Down -->
     <button class="diag315" onclick="sendCommand('/diag315')">&#x2198;</button> <!-- Down-right -->
     <button class="" onclick="sendCommand('/rotateleft')">Rotate left</button> 
+    <button class="" onclick="sendCommand('/path')">Set Path</button> 
     <button class="" onclick="sendCommand('/rotateright')">Rotate right</button> 
   </div>
   <div>
@@ -110,11 +111,11 @@ const char index_html[] PROGMEM = R"rawliteral(
             .catch(error => console.error('Error:', error));
     }
     function updateWeight() {
-      fetch('/weight')
+    fetch('/weight')
         .then(response => response.text())
         .then(data => document.getElementById('weight-value').innerText = data)
         .catch(error => console.error('Error:', error));
-    }
+}
   </script>
 </body>
 </html>
@@ -258,6 +259,10 @@ void setup()
         Vy = 0;
         W = 15;
         request->send(200, "text/plain", "Moving 315°"); });
+    server.on("/path", HTTP_GET, [](AsyncWebServerRequest *request)
+              {
+    SpecialState = Triangle;
+        request->send(200, "text/plain", "Moving triangle"); });
 
     server.on("/setSpeed", HTTP_GET, [](AsyncWebServerRequest *request)
               {
@@ -273,17 +278,15 @@ void setup()
                 request->send(400, "text/plain", "Missing speed value");
               } });
 
-    server.on("/setWeight", HTTP_GET, [](AsyncWebServerRequest *request)
+    server.on("/weight", HTTP_GET, [](AsyncWebServerRequest *request)
               {
-                // Mass = abs(scale.get_units(10));
-    if (request->hasParam("value")) {
-      String value = request->getParam("value")->value();
-      float weight = abs(scale.get_units(10));  // Use toFloat() to handle decimal values
-      Serial.print("Weight set to: ");
-      Serial.println(weight);
-      request->send(200, "text/plain", String(weight));
+    if (scale.is_ready()) {
+        float weight = abs(scale.get_units(10)); // Average of 10 readings
+        Serial.print("Weight measured: ");
+        Serial.println(weight);
+        request->send(200, "text/plain", String(weight, 2)); // Send weight with 2 decimal points
     } else {
-      request->send(400, "text/plain", "Missing weight value");
+        request->send(500, "text/plain", "HX711 not ready"); // Handle HX711 not ready error
     } });
 
     server.begin();
@@ -311,7 +314,7 @@ float Omega_M2 = 0;
 float Omega_M3 = 0;
 
 float e0[] = {0.0, 0.0, 0.0};
-float Kp0 = 0.9; // 0.5
+float Kp0 = 0.5; // 0.5
 float Ki0 = 2.3; // 12.3
 float Kd0 = 0.0;
 float integral0 = 0.0;
@@ -320,7 +323,7 @@ int pid0 = 0.00;
 float setpoint0 = 0;
 
 float e1[] = {0.0, 0.0, 0.0};
-float Kp1 = 0.9; // 0.5
+float Kp1 = 0.5; // 0.5
 float Ki1 = 2.3; // 12.3
 float Kd1 = 0.0;
 float integral1 = 0.0;
@@ -329,7 +332,7 @@ int pid1 = 0.00;
 float setpoint1 = 0;
 
 float e2[] = {0.0, 0.0, 0.0};
-float Kp2 = 0.9; // 0.5
+float Kp2 = 0.5; // 0.5
 float Ki2 = 2.3; // 12.3
 float Kd2 = 0.0;
 float integral2 = 0.0;
@@ -338,7 +341,7 @@ int pid2 = 0.00;
 float setpoint2 = 0;
 
 float e3[] = {0.0, 0.0, 0.0};
-float Kp3 = 0.9; // 0.5
+float Kp3 = 0.5; // 0.5
 float Ki3 = 2.3; // 12.3
 float Kd3 = 0.0;
 float integral3 = 0.0;
@@ -350,43 +353,60 @@ float lx = 0.122;
 float ly = 0.145;
 
 int count_Triangle = 0;
+int time_Limit = 40;
 void loop()
 {
     uint32_t nowtime = millis();            // Get the current time in milliseconds
     uint32_t deltatime = nowtime - pretime; // Calculate the elapsed time
     if (deltatime >= tsamp * 1000)
     { // Check if the sampling time has passed
-        // Switch(SpecialState)
-        // {
-        // case Triangle:
-        // {
-        //     if (count_Triangle < 20)
-        //     {
-        //         Vx = 2.5;
-        //         Vy = -2.5;
-        //         W = 0;
-        //         count++;
-        //     }
-        //     else if(count_Triangle>=20 && count_Triangle<40){
-        //         Vx = -2.5;
-        //         Vy = -2.5;
-        //         W = 0;
-        //         count++;
-        //     }
-        //     else if(count_Triangle>=40 && count_Triangle<60){
-        //         Vx = -2.5;
-        //         Vy = -2.5;
-        //         W = 0;
-        //         count++;
-        //     }
-        //     else {
-        //         Vx = -2.5;
-        //         Vy = -2.5;
-        //         W = 0;
-        //         SpecialState = None;
-        //     }
-        // }
-        // }
+        switch (SpecialState)
+        {
+        case Triangle:
+        {
+            if (count_Triangle < time_Limit)
+            {
+                Vx = 2.5;
+                Vy = -2.5;
+                W = 0;
+                count_Triangle++;
+                if (count_Triangle == time_Limit - 1)
+                {
+                    Vx = 0;
+                    Vy = 0;
+                    W = 0;
+                }
+            }
+            else if (count_Triangle >= time_Limit && count_Triangle < time_Limit * 2)
+            {
+                Vx = -2.5;
+                Vy = -2.5;
+                W = 0;
+                count_Triangle++;
+                if (count_Triangle == time_Limit*2 - 1)
+                {
+                    Vx = 0;
+                    Vy = 0;
+                    W = 0;
+                }
+            }
+            else if (count_Triangle >= time_Limit * 2 && count_Triangle < time_Limit * 3.5)
+            {
+                Vx = 0;
+                Vy = 3.5;
+                W = 0;
+                count_Triangle++;
+            }
+            else
+            {
+                Vx = 0;
+                Vy = 0;
+                W = 0;
+                SpecialState = None;
+                count_Triangle = 0;
+            }
+        }
+        }
         setpoint0 = (1 / R) * (Vx - Vy - (lx + ly) * W);
         setpoint1 = (1 / R) * (Vx + Vy + (lx + ly) * W);
         setpoint2 = (1 / R) * (Vx + Vy - (lx + ly) * W);
